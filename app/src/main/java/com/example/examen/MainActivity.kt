@@ -1,8 +1,10 @@
 package com.example.examen
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.DatePickerDialog
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -11,7 +13,10 @@ import android.hardware.SensorManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
+import android.net.Uri
 import android.os.Bundle
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.DatePicker
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -28,18 +33,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import java.util.Calendar
 import java.util.Locale
@@ -61,6 +68,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var latitudCargada = mutableStateOf("0.0")
     private var longitudCargada = mutableStateOf("0.0")
     private var estadoSensorEnVivo = mutableStateOf("Listo: Agita el teléfono para cargar GPS")
+
+    private var campusCentroLat = mutableDoubleStateOf(LocationHelper.DEFAULT_LAT)
+    private var campusCentroLng = mutableDoubleStateOf(LocationHelper.DEFAULT_LNG)
+    private var mostrarDialogoMapa = mutableStateOf(false)
+    private var mensajeBloqueoPerimetro = mutableStateOf<String?>(null)
 
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
@@ -106,30 +118,96 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     }
                 }
 
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.surface
-                ) {
-                    RegistroAlumnoScreen(
-                        tipoConexion = estadoConexion.value,
-                        mensajeAlerta = mensajeAlerta.value,
-                        latitud = latitudCargada.value,
-                        longitud = longitudCargada.value,
-                        sensorInfo = estadoSensorEnVivo.value,
-                        alumnos = listaAlumnos.value,
-                        pendientes = pendientesCount.intValue,
-                        onVerificarConexionManual = {
-                            comprobarRedYEmitirAlerta(mostrarToast = true)
+                RegistroAlumnoScreen(
+                    tipoConexion = estadoConexion.value,
+                    mensajeAlerta = mensajeAlerta.value,
+                    latitud = latitudCargada.value,
+                    longitud = longitudCargada.value,
+                    sensorInfo = estadoSensorEnVivo.value,
+                    alumnos = listaAlumnos.value,
+                    pendientes = pendientesCount.intValue,
+                    campusLat = campusCentroLat.doubleValue,
+                    campusLng = campusCentroLng.doubleValue,
+                    onVerificarConexionManual = { comprobarRedYEmitirAlerta(mostrarToast = true) },
+                    onSimularSensorGPS = {
+                        estadoSensorEnVivo.value = "⚡ ¡Sensor Agitado!"
+                        activarCapturaUbicacion("Manual")
+                    },
+                    onDismissAlerta = { mensajeAlerta.value = null },
+                    onRegistrarAlumno = { alumno -> guardarAlumno(alumno) },
+                    onSincronizarManual = { sincronizarBasesDeDatos() },
+                    onAbrirMapa = { mostrarDialogoMapa.value = true },
+                    onCalibrarCampusActual = {
+                        val latActual = latitudCargada.value.toDoubleOrNull() ?: LocationHelper.DEFAULT_LAT
+                        val lngActual = longitudCargada.value.toDoubleOrNull() ?: LocationHelper.DEFAULT_LNG
+                        campusCentroLat.doubleValue = latActual
+                        campusCentroLng.doubleValue = lngActual
+                        Toast.makeText(this, "Centro de Univalle calibrado a tu ubicación actual", Toast.LENGTH_SHORT).show()
+                    },
+                    onSimularDentro = {
+                        latitudCargada.value = String.format(Locale.US, "%.5f", campusCentroLat.doubleValue + 0.0003)
+                        longitudCargada.value = String.format(Locale.US, "%.5f", campusCentroLng.doubleValue + 0.0003)
+                        Toast.makeText(this, "Simulando ubicación DENTRO del campus (<100m)", Toast.LENGTH_SHORT).show()
+                    },
+                    onSimularFuera = {
+                        latitudCargada.value = String.format(Locale.US, "%.5f", campusCentroLat.doubleValue + 0.0035)
+                        longitudCargada.value = String.format(Locale.US, "%.5f", campusCentroLng.doubleValue + 0.0035)
+                        Toast.makeText(this, "Simulando ubicación FUERA del campus (>100m)", Toast.LENGTH_SHORT).show()
+                    }
+                )
+
+                if (mostrarDialogoMapa.value) {
+                    val latEstudiante = latitudCargada.value.toDoubleOrNull() ?: campusCentroLat.doubleValue
+                    val lngEstudiante = longitudCargada.value.toDoubleOrNull() ?: campusCentroLng.doubleValue
+                    val distancia = LocationHelper.calcularDistanciaMetros(
+                        latEstudiante,
+                        lngEstudiante,
+                        campusCentroLat.doubleValue,
+                        campusCentroLng.doubleValue
+                    )
+                    val dentro = distancia <= LocationHelper.RADIO_PERIMETRO_METROS
+
+                    DialogoMapaPerimetro(
+                        campusLat = campusCentroLat.doubleValue,
+                        campusLng = campusCentroLng.doubleValue,
+                        studentLat = latEstudiante,
+                        studentLng = lngEstudiante,
+                        distancia = distancia,
+                        dentro = dentro,
+                        onDismiss = { mostrarDialogoMapa.value = false },
+                        onAbrirGoogleMaps = {
+                            val uri = Uri.parse("geo:$latEstudiante,$lngEstudiante?q=$latEstudiante,$lngEstudiante(Estudiante)")
+                            val mapIntent = Intent(Intent.ACTION_VIEW, uri)
+                            try {
+                                startActivity(mapIntent)
+                            } catch (e: Exception) {
+                                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://maps.google.com/?q=$latEstudiante,$lngEstudiante"))
+                                startActivity(webIntent)
+                            }
+                        }
+                    )
+                }
+
+                mensajeBloqueoPerimetro.value?.let { mensaje ->
+                    AlertDialog(
+                        onDismissRequest = { mensajeBloqueoPerimetro.value = null },
+                        title = { Text("Perímetro No Autorizado", fontWeight = FontWeight.Bold) },
+                        text = { Text(mensaje) },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    mensajeBloqueoPerimetro.value = null
+                                    mostrarDialogoMapa.value = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
+                            ) {
+                                Text("Verificar en Mapa")
+                            }
                         },
-                        onSimularSensorGPS = {
-                            activarCapturaUbicacion("Acelerómetro")
-                        },
-                        onDismissAlerta = { mensajeAlerta.value = null },
-                        onRegistrarAlumno = { alumno ->
-                            guardarAlumno(alumno)
-                        },
-                        onSincronizarManual = {
-                            sincronizarBasesDeDatos()
+                        dismissButton = {
+                            TextButton(onClick = { mensajeBloqueoPerimetro.value = null }) {
+                                Text("Entendido")
+                            }
                         }
                     )
                 }
@@ -139,8 +217,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onResume() {
         super.onResume()
+        acelerometro?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+        }
         comprobarRedYEmitirAlerta(mostrarToast = false)
-        acelerometro?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
     }
 
     override fun onPause() {
@@ -196,6 +276,23 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun guardarAlumno(alumno: Alumno) {
         if (alumno.ci.isEmpty() || alumno.nombres.isEmpty()) {
             Toast.makeText(this, "Por favor completa CI y Nombres", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (alumno.latitud == 0.0 && alumno.longitud == 0.0) {
+            Toast.makeText(this, "Debes agitar el teléfono para capturar la ubicación antes de registrar", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val distancia = LocationHelper.calcularDistanciaMetros(
+            alumno.latitud,
+            alumno.longitud,
+            campusCentroLat.doubleValue,
+            campusCentroLng.doubleValue
+        )
+
+        if (distancia > LocationHelper.RADIO_PERIMETRO_METROS) {
+            mensajeBloqueoPerimetro.value = "No es posible registrar al estudiante.\n\nSe encuentra a ${distancia.toInt()} metros del campus universitario. El registro solo está permitido dentro del perímetro de 100 metros."
             return
         }
 
@@ -318,11 +415,17 @@ fun RegistroAlumnoScreen(
     sensorInfo: String,
     alumnos: List<Alumno>,
     pendientes: Int,
+    campusLat: Double,
+    campusLng: Double,
     onVerificarConexionManual: () -> Unit,
     onSimularSensorGPS: () -> Unit,
     onDismissAlerta: () -> Unit,
     onRegistrarAlumno: (Alumno) -> Unit,
-    onSincronizarManual: () -> Unit
+    onSincronizarManual: () -> Unit,
+    onAbrirMapa: () -> Unit,
+    onCalibrarCampusActual: () -> Unit,
+    onSimularDentro: () -> Unit,
+    onSimularFuera: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -330,6 +433,16 @@ fun RegistroAlumnoScreen(
     var nombres by remember { mutableStateOf("") }
     var apellidos by remember { mutableStateOf("") }
     var fechaNacimiento by remember { mutableStateOf("") }
+
+    val latNum = latitud.toDoubleOrNull() ?: 0.0
+    val lngNum = longitud.toDoubleOrNull() ?: 0.0
+    val tieneCoordenadas = (latNum != 0.0 && lngNum != 0.0)
+    val distanciaActual = if (tieneCoordenadas) {
+        LocationHelper.calcularDistanciaMetros(latNum, lngNum, campusLat, campusLng)
+    } else {
+        0f
+    }
+    val dentroPerimetro = tieneCoordenadas && (distanciaActual <= LocationHelper.RADIO_PERIMETRO_METROS)
 
     val calendar = Calendar.getInstance()
     val datePickerDialog = remember {
@@ -593,6 +706,104 @@ fun RegistroAlumnoScreen(
             }
 
             item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (!tieneCoordenadas) {
+                            Color(0xFFF5F5F5)
+                        } else if (dentroPerimetro) {
+                            Color(0xFFE8F5E9)
+                        } else {
+                            Color(0xFFFFEBEE)
+                        }
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = if (!tieneCoordenadas) Color(0xFF616161) else if (dentroPerimetro) Color(0xFF2E7D32) else Color(0xFFC62828),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "Perímetro Universidad (100 m):",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = if (!tieneCoordenadas) Color(0xFF424242) else if (dentroPerimetro) Color(0xFF1B5E20) else Color(0xFFB71C1C)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        val estadoTexto = if (!tieneCoordenadas) {
+                            "Agita el teléfono para obtener GPS y comprobar si estás dentro del perímetro."
+                        } else if (dentroPerimetro) {
+                            "🟢 Registro Habilitado: Estás a ${distanciaActual.toInt()}m de Univalle (Dentro de los 100m)."
+                        } else {
+                            "🔴 Registro Bloqueado: Estás a ${distanciaActual.toInt()}m de Univalle (Supera los 100m)."
+                        }
+
+                        Text(
+                            text = estadoTexto,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (!tieneCoordenadas) Color(0xFF616161) else if (dentroPerimetro) Color(0xFF2E7D32) else Color(0xFFC62828)
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = onAbrirMapa,
+                                modifier = Modifier.weight(1.2f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00796B))
+                            ) {
+                                Text("Verificar en Mapa", fontSize = 12.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = onCalibrarCampusActual,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Fijar Campus", fontSize = 11.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            TextButton(
+                                onClick = onSimularDentro,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Probar Adentro (45m)", fontSize = 10.sp, color = Color(0xFF2E7D32))
+                            }
+                            TextButton(
+                                onClick = onSimularFuera,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Probar Afuera (350m)", fontSize = 10.sp, color = Color(0xFFC62828))
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -680,6 +891,100 @@ fun RegistroAlumnoScreen(
     }
 }
 
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun DialogoMapaPerimetro(
+    campusLat: Double,
+    campusLng: Double,
+    studentLat: Double,
+    studentLng: Double,
+    distancia: Float,
+    dentro: Boolean,
+    onDismiss: () -> Unit,
+    onAbrirGoogleMaps: () -> Unit
+) {
+    val colorEstado = if (dentro) Color(0xFF2E7D32) else Color(0xFFC62828)
+    val tituloEstado = if (dentro) "REGISTRO POSIBLE" else "REGISTRO BLOQUEADO"
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Verificación en Mapa (100m)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(4.dp))
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (dentro) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
+                ) {
+                    Text(
+                        text = "$tituloEstado: ${distancia.toInt()} m",
+                        color = colorEstado,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Perímetro permitido: radio de 100m alrededor de Univalle.",
+                    fontSize = 11.sp,
+                    color = Color.DarkGray
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            webViewClient = WebViewClient()
+                            loadDataWithBaseURL(
+                                "https://openstreetmap.org",
+                                LocationHelper.generarHtmlMapa(
+                                    campusLat = campusLat,
+                                    campusLng = campusLng,
+                                    studentLat = studentLat,
+                                    studentLng = studentLng,
+                                    distancia = distancia,
+                                    dentro = dentro
+                                ),
+                                "text/html",
+                                "UTF-8",
+                                null
+                            )
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = onAbrirGoogleMaps,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Abrir en App Google Maps", fontSize = 11.sp)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
+            ) {
+                Text("Cerrar")
+            }
+        }
+    )
+}
+
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, showSystemUi = true)
 @Composable
 fun PreviewPantallaAlumno() {
@@ -703,11 +1008,17 @@ fun PreviewPantallaAlumno() {
             )
         ),
         pendientes = 0,
+        campusLat = -17.3753,
+        campusLng = -66.1568,
         onVerificarConexionManual = {},
         onSimularSensorGPS = {},
         onDismissAlerta = {},
         onRegistrarAlumno = {},
-        onSincronizarManual = {}
+        onSincronizarManual = {},
+        onAbrirMapa = {},
+        onCalibrarCampusActual = {},
+        onSimularDentro = {},
+        onSimularFuera = {}
     )
 }
 
@@ -755,35 +1066,28 @@ fun AlumnoItemCard(alumno: Alumno) {
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                "CI: ${alumno.ci} • Nacimiento: ${alumno.fechaNacimiento}",
+                "CI: ${alumno.ci}",
                 fontSize = 12.sp,
-                color = Color(0xFF424242)
+                color = Color(0xFF455A64)
             )
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = Color(0xFFEEEEEE))
+            Text(
+                "Nacimiento: ${alumno.fechaNacimiento}",
+                fontSize = 12.sp,
+                color = Color(0xFF455A64)
+            )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = Color(0xFFF5F5F5)
             ) {
                 Text(
-                    "Lat: ${alumno.latitud} | Lng: ${alumno.longitud}",
+                    "📍 Lat: ${alumno.latitud} | Lng: ${alumno.longitud}",
                     fontSize = 11.sp,
-                    color = Color(0xFF546E7A)
-                )
-
-                val docText = if (alumno.isSynced == 1 && alumno.firestoreId.isNotEmpty()) {
-                    val shortId = if (alumno.firestoreId.length > 8) alumno.firestoreId.substring(0, 8) + "..." else alumno.firestoreId
-                    "Doc: $shortId"
-                } else {
-                    "Doc: pendiente"
-                }
-
-                Text(
-                    docText,
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = if (alumno.isSynced == 1) Color(0xFF2E7D32) else Color(0xFFB0BEC5)
+                    color = Color(0xFF37474F),
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                 )
             }
         }
