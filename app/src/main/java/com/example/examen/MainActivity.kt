@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private var acelerometro: Sensor? = null
     private var sensorProximidad: Sensor? = null
+    private var sensorLuz: Sensor? = null
     private var ultimoTimestampSensor: Long = 0L
 
     // Bases de Datos Local (SQLite) y Nube (Firestore) (Punto 10)
@@ -64,7 +65,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var mensajeAlerta = mutableStateOf<String?>(null)
     private var latitudCargada = mutableStateOf("0.0")
     private var longitudCargada = mutableStateOf("0.0")
-    private var estadoSensorEnVivo = mutableStateOf("Esperando detección (Pasa tu mano o agita)")
+    private var estadoSensorEnVivo = mutableStateOf("Iniciando sensores...")
 
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
@@ -81,6 +82,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         acelerometro = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         sensorProximidad = sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)
+        sensorLuz = sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT)
+
+        // Diagnóstico inicial en pantalla para POCO / Xiaomi
+        val nombreProximidad = sensorProximidad?.name ?: "Virtual/No disponible"
+        estadoSensorEnVivo.value = "Sensor: $nombreProximidad • Listo para agitar o tapar"
 
         recargarDatos()
 
@@ -147,14 +153,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         super.onResume()
         comprobarRedYEmitirAlerta(mostrarToast = false)
 
-        acelerometro?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
-        }
-
-        // Registrar Proximidad con la mayor sensibilidad posible (SENSOR_DELAY_NORMAL o UI)
-        sensorProximidad?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
-        }
+        acelerometro?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+        sensorProximidad?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+        sensorLuz?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
     }
 
     override fun onPause() {
@@ -171,46 +172,54 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // PUNTO 9: Detección Mejorada de Proximidad y Acelerómetro
+    // PUNTO 9: Detección Sensible para POCO / Xiaomi (Agitar + Proximidad + Luz)
     // ─────────────────────────────────────────────────────────────────────────
 
     override fun onSensorChanged(event: SensorEvent?) {
         if (event == null) return
         val ahora = System.currentTimeMillis()
 
-        // 1. SENSOR DE PROXIMIDAD
+        // 1. SENSOR DE AGITADO (Acelerómetro) - 100% Funcional en POCO X7 Pro
+        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            val x = event.values[0] / SensorManager.GRAVITY_EARTH
+            val y = event.values[1] / SensorManager.GRAVITY_EARTH
+            val z = event.values[2] / SensorManager.GRAVITY_EARTH
+            val gForce = sqrt((x * x + y * y + z * z).toDouble())
+
+            // Un movimiento de muñeca o sacudida leve supera 1.3g
+            if (gForce > 1.30 && (ahora - ultimoTimestampSensor > 1200)) {
+                ultimoTimestampSensor = ahora
+                estadoSensorEnVivo.value = "⚡ ¡SACUDIDA DETECTADA! (Fuerza G: ${String.format(Locale.US, "%.2f", gForce)})"
+                activarCapturaUbicacion("Sacudida de Teléfono (Acelerómetro)")
+            }
+        }
+
+        // 2. SENSOR DE PROXIMIDAD
         if (event.sensor.type == Sensor.TYPE_PROXIMITY) {
             val distancia = event.values[0]
             val maxRango = event.sensor.maximumRange
 
-            // En muchos dispositivos (Xiaomi, Samsung) 'cerca' es 0.0 o menor que el rango maximo
-            val estaCerca = (distancia < maxRango) || (distancia == 0.0f) || (distancia <= 2.0f)
-
+            val estaCerca = (distancia < maxRango) || (distancia == 0.0f) || (distancia <= 3.0f)
             estadoSensorEnVivo.value = if (estaCerca) {
-                "✋ ¡MANO DETECTADA CERCA! (${distancia} cm)"
+                "✋ ¡PROXIMIDAD CERCA! (${distancia} cm)"
             } else {
-                "👋 Mano Lejos (${distancia} cm / Max: ${maxRango} cm)"
+                "👋 Proximidad: Lejos (${distancia} cm)"
             }
 
-            // Si está cerca y pasaron al menos 1.2 segundos del último disparo
             if (estaCerca && (ahora - ultimoTimestampSensor > 1200)) {
                 ultimoTimestampSensor = ahora
-                activarCapturaUbicacion("Sensor de Proximidad (Mano cerca)")
+                activarCapturaUbicacion("Sensor de Proximidad")
             }
         }
 
-        // 2. SENSOR DE ACELERÓMETRO (Agitar)
-        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-            val x = event.values[0]
-            val y = event.values[1]
-            val z = event.values[2]
-            val aceleracionTotal = sqrt((x * x + y * y + z * z).toDouble())
-
-            // Si se agita con fuerza
-            if (aceleracionTotal > 14.5 && (ahora - ultimoTimestampSensor > 1200)) {
+        // 3. SENSOR DE LUZ (Respaldo óptico para POCO/Xiaomi si el de proximidad es virtual)
+        // En los Poco/Xiaomi, al tapar la parte superior con la mano, el sensor de luz cae a 0 lux
+        if (event.sensor.type == Sensor.TYPE_LIGHT) {
+            val lux = event.values[0]
+            if (lux <= 3.0f && (ahora - ultimoTimestampSensor > 1500)) {
                 ultimoTimestampSensor = ahora
-                estadoSensorEnVivo.value = "⚡ ¡SACUDIDA DETECTADA! (Aceleración: ${String.format(Locale.US, "%.1f", aceleracionTotal)})"
-                activarCapturaUbicacion("Dispositivo Agitado (Acelerómetro)")
+                estadoSensorEnVivo.value = "✋ ¡MANO TAPANDO PANTALLA! ($lux lux)"
+                activarCapturaUbicacion("Sensor Óptico Cubierto (Mano cerca)")
             }
         }
     }
@@ -219,8 +228,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     private fun activarCapturaUbicacion(origenSensor: String) {
         runOnUiThread {
-            Toast.makeText(this, "📡 $origenSensor: Leyendo GPS...", Toast.LENGTH_SHORT).show()
-
+            Toast.makeText(this, "📡 $origenSensor: Obteniendo GPS...", Toast.LENGTH_SHORT).show()
             LocationHelper.obtenerCoordenadas(this) { lat, lng ->
                 runOnUiThread {
                     latitudCargada.value = String.format(Locale.US, "%.5f", lat)
@@ -314,10 +322,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         pendientesCount.intValue = dbHelper.contarPendientes()
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUNTO 8: Red y Alerta Sonora
-    // ─────────────────────────────────────────────────────────────────────────
-
     private fun comprobarRedYEmitirAlerta(mostrarToast: Boolean) {
         val tipo = NetworkSoundHelper.verificarConexion(this)
         estadoConexion.value = tipo
@@ -385,7 +389,6 @@ fun RegistroAlumnoScreen(
     var apellidos by remember { mutableStateOf("") }
     var fechaNacimiento by remember { mutableStateOf("") }
 
-    // Dialogo de Calendario para Fecha de Nacimiento
     val calendar = Calendar.getInstance()
     val datePickerDialog = remember {
         DatePickerDialog(
@@ -393,7 +396,7 @@ fun RegistroAlumnoScreen(
             { _: DatePicker, year: Int, month: Int, dayOfMonth: Int ->
                 fechaNacimiento = String.format(Locale.getDefault(), "%02d/%02d/%04d", dayOfMonth, month + 1, year)
             },
-            calendar.get(Calendar.YEAR) - 20, // Año aproximado para estudiante (ej. 2004)
+            calendar.get(Calendar.YEAR) - 20,
             calendar.get(Calendar.MONTH),
             calendar.get(Calendar.DAY_OF_MONTH)
         )
@@ -453,7 +456,6 @@ fun RegistroAlumnoScreen(
         ) {
             item { Spacer(modifier = Modifier.height(6.dp)) }
 
-            // Botones de prueba Punto 8 y Punto 9
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -478,7 +480,6 @@ fun RegistroAlumnoScreen(
                 }
             }
 
-            // Alerta si cambió la red
             mensajeAlerta?.let { mensaje ->
                 item {
                     Card(
@@ -509,7 +510,7 @@ fun RegistroAlumnoScreen(
                 }
             }
 
-            // Card del Sensor en Vivo (Proximidad + Agitar)
+            // Card del Sensor en Vivo (Proximidad + Agitar + Sensor de Luz)
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -518,13 +519,13 @@ fun RegistroAlumnoScreen(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            "📲 Sensor de Proximidad & Agitar (Punto 9):",
+                            "📲 Sensor para GPS (Punto 9):",
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
                             color = Color(0xFF0277BD)
                         )
                         Text(
-                            "• Tapa el auricular/cámara frontal con la mano O agita el teléfono para cargar Lat y Long.",
+                            "• Agita el teléfono con la muñeca O tapa la parte superior de la pantalla para cargar Lat y Long.",
                             fontSize = 11.sp,
                             color = Color(0xFF01579B)
                         )
@@ -545,7 +546,6 @@ fun RegistroAlumnoScreen(
                 }
             }
 
-            // Título Formulario
             item {
                 Text(
                     text = "Formulario de Registro (Punto 7)",
@@ -555,7 +555,6 @@ fun RegistroAlumnoScreen(
                 )
             }
 
-            // CI
             item {
                 OutlinedTextField(
                     value = ci,
@@ -568,7 +567,6 @@ fun RegistroAlumnoScreen(
                 )
             }
 
-            // Nombres
             item {
                 OutlinedTextField(
                     value = nombres,
@@ -580,7 +578,6 @@ fun RegistroAlumnoScreen(
                 )
             }
 
-            // Apellidos
             item {
                 OutlinedTextField(
                     value = apellidos,
@@ -592,13 +589,13 @@ fun RegistroAlumnoScreen(
                 )
             }
 
-            // Fecha de Nacimiento (con DatePicker / Calendario)
+            // Fecha de Nacimiento con DatePicker (Calendario)
             item {
                 Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = fechaNacimiento,
                         onValueChange = {},
-                        readOnly = true, // Se abre el calendario al hacer click
+                        readOnly = true,
                         label = { Text("Fecha de Nacimiento (Toca para elegir)") },
                         placeholder = { Text("Seleccionar en el calendario") },
                         trailingIcon = {
@@ -614,7 +611,6 @@ fun RegistroAlumnoScreen(
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp)
                     )
-                    // Capa clickeable transparente para que al tocar cualquier parte del campo se abra el calendario
                     Box(
                         modifier = Modifier
                             .matchParentSize()
@@ -623,7 +619,7 @@ fun RegistroAlumnoScreen(
                 }
             }
 
-            // Latitud y Longitud (readOnly = true)
+            // Latitud y Longitud (readOnly = true, Punto 9)
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -747,10 +743,6 @@ fun RegistroAlumnoScreen(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// VISTA PREVIA VISUAL (Para ver el diseño en Android Studio en pestaña Split)
-// ─────────────────────────────────────────────────────────────────────────────
-
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, showSystemUi = true)
 @Composable
 fun PreviewPantallaAlumno() {
@@ -759,7 +751,7 @@ fun PreviewPantallaAlumno() {
         mensajeAlerta = null,
         latitud = "-17.3753",
         longitud = "-66.1568",
-        sensorInfo = "👋 Proximidad: Esperando detección",
+        sensorInfo = "Sensor: Listo para agitar o tapar",
         alumnos = listOf(
             Alumno(
                 id = 1,
