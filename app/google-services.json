@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "241204741928",
+    "project_id": "firestore-df5cd",
+    "storage_bucket": "firestore-df5cd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:241204741928:android:027eb0aaaa94cbded9f21d",
+        "android_client_info": {
+          "package_name": "com.univalle.nube_base_de_datos"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAoFfmhV8FYXSMzGr-xXLaMSqGGkQdNRYI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
