@@ -747,6 +747,41 @@ fun RegistroAlumnoScreen(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// VISTA PREVIA VISUAL (Para ver el diseño en Android Studio en pestaña Split)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, showSystemUi = true)
+@Composable
+fun PreviewPantallaAlumno() {
+    RegistroAlumnoScreen(
+        tipoConexion = TipoConexion.WIFI,
+        mensajeAlerta = null,
+        latitud = "-17.3753",
+        longitud = "-66.1568",
+        sensorInfo = "👋 Proximidad: Esperando detección",
+        alumnos = listOf(
+            Alumno(
+                id = 1,
+                ci = "8392102",
+                nombres = "Juan Carlos",
+                apellidos = "Pérez Gómez",
+                fechaNacimiento = "15/04/2001",
+                latitud = -17.3753,
+                longitud = -66.1568,
+                isSynced = 1,
+                firestoreId = "AbCdEf123"
+            )
+        ),
+        pendientes = 0,
+        onVerificarConexionManual = {},
+        onSimularSensorGPS = {},
+        onDismissAlerta = {},
+        onRegistrarAlumno = {},
+        onSincronizarManual = {}
+    )
+}
+
 @Composable
 fun AlumnoItemCard(alumno: Alumno) {
     Card(

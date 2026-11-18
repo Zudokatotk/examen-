@@ -9,5 +9,5 @@ data class Alumno(
     val fechaNacimiento: String = "",
     val latitud: Double = 0.0,
     val longitud: Double = 0.0,
-    var isSynced: Int = 0 // 0 = pendiente local, 1 = sincronizado en Firebase
+    var isSynced: Int = 0
 )
