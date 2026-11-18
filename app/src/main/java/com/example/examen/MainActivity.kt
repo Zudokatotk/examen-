@@ -10,6 +10,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -30,17 +31,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // Vistas
     private lateinit var layoutEstadoRed: LinearLayout
     private lateinit var tvEstadoRed: TextView
-    private lateinit var tvSensorValores: TextView
     private lateinit var tvSensorMagnitud: TextView
+    private lateinit var tvEjeX: TextView
+    private lateinit var tvEjeY: TextView
+    private lateinit var tvEjeZ: TextView
     private lateinit var btnRegistrar: Button
     private lateinit var btnSincronizar: Button
+    private lateinit var tvTotalRegistros: TextView
+    private lateinit var tvVacio: TextView
     private lateinit var rvMediciones: RecyclerView
 
     // Sensores
     private lateinit var sensorManager: SensorManager
     private var acelerometro: Sensor? = null
     private var valorMagnitudActual: Double = 9.81
-    private var valoresEjesActual: String = "X: 0.00 | Y: 0.00 | Z: 9.81"
+    private var actualX: Double = 0.0
+    private var actualY: Double = 0.0
+    private var actualZ: Double = 9.81
 
     // Base de datos y red
     private lateinit var dbHelper: DatabaseHelper
@@ -66,10 +73,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         // Vincular vistas
         layoutEstadoRed = findViewById(R.id.layout_estado_red)
         tvEstadoRed = findViewById(R.id.tv_estado_red)
-        tvSensorValores = findViewById(R.id.tv_sensor_valores)
         tvSensorMagnitud = findViewById(R.id.tv_sensor_magnitud)
+        tvEjeX = findViewById(R.id.tv_eje_x)
+        tvEjeY = findViewById(R.id.tv_eje_y)
+        tvEjeZ = findViewById(R.id.tv_eje_z)
         btnRegistrar = findViewById(R.id.btn_registrar)
         btnSincronizar = findViewById(R.id.btn_sincronizar)
+        tvTotalRegistros = findViewById(R.id.tv_total_registros)
+        tvVacio = findViewById(R.id.tv_vacio)
         rvMediciones = findViewById(R.id.rv_mediciones)
 
         // Configurar RecyclerView
@@ -115,14 +126,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // --- SENSORES ---
     override fun onSensorChanged(event: SensorEvent?) {
         if (event != null && event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-            val x = event.values[0]
-            val y = event.values[1]
-            val z = event.values[2]
-            valorMagnitudActual = sqrt((x * x + y * y + z * z).toDouble())
-            valoresEjesActual = String.format(Locale.US, "X: %.2f | Y: %.2f | Z: %.2f", x, y, z)
+            actualX = event.values[0].toDouble()
+            actualY = event.values[1].toDouble()
+            actualZ = event.values[2].toDouble()
+            valorMagnitudActual = sqrt(actualX * actualX + actualY * actualY + actualZ * actualZ)
 
-            tvSensorValores.text = valoresEjesActual
-            tvSensorMagnitud.text = String.format(Locale.US, "Magnitud: %.2f m/s²", valorMagnitudActual)
+            tvSensorMagnitud.text = String.format(Locale.US, "%.2f", valorMagnitudActual)
+            tvEjeX.text = String.format(Locale.US, "%.2f", actualX)
+            tvEjeY.text = String.format(Locale.US, "%.2f", actualY)
+            tvEjeZ.text = String.format(Locale.US, "%.2f", actualZ)
         }
     }
 
@@ -137,6 +149,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val nuevaMedicion = Medicion(
             tipoSensor = "Acelerómetro",
             valor = valorMagnitudActual,
+            ejeX = actualX,
+            ejeY = actualY,
+            ejeZ = actualZ,
             fechaHora = fecha,
             isSynced = 0
         )
@@ -151,7 +166,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 medicion = nuevaMedicion,
                 onSuccess = { firestoreId ->
                     dbHelper.marcarComoSincronizado(idLocal, firestoreId)
-                    Toast.makeText(this, "Guardado y sincronizado online ☁️", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Guardado y sincronizado en Firestore ☁️", Toast.LENGTH_SHORT).show()
                     recargarDatos()
                 },
                 onFailure = {
@@ -161,20 +176,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             )
         } else {
             // Sin conexión: queda guardado solo local con is_synced = 0
-            Toast.makeText(this, "Guardado localmente (Offline) 📱", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Guardado localmente en SQLite (Offline) 📱", Toast.LENGTH_SHORT).show()
             recargarDatos()
         }
     }
 
     private fun sincronizarPendientes() {
         if (!NetworkHelper.hayConexion(this)) {
-            Toast.makeText(this, "No hay conexión a internet ❌", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No hay conexión a internet para sincronizar ❌", Toast.LENGTH_SHORT).show()
             return
         }
 
         val pendientes = dbHelper.obtenerNoSincronizadas()
         if (pendientes.isEmpty()) {
-            Toast.makeText(this, "Todo está sincronizado ✔️", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Todos los registros ya están en la nube ✔️", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -189,7 +204,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     subidos++
                     if (subidos == pendientes.size) {
                         btnSincronizar.isEnabled = true
-                        Toast.makeText(this, "Sincronizados $subidos registros ☁️", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "¡Sincronización completa! ($subidos subidos) ☁️", Toast.LENGTH_SHORT).show()
                         recargarDatos()
                     }
                 },
@@ -204,8 +219,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val lista = dbHelper.obtenerTodas()
         adapter.actualizarLista(lista)
 
+        tvTotalRegistros.text = "Total: ${lista.size}"
+        tvVacio.visibility = if (lista.isEmpty()) View.VISIBLE else View.GONE
+
         val pendientes = dbHelper.contarPendientes()
-        btnSincronizar.text = "🔄 Sync ($pendientes)"
+        btnSincronizar.text = "🔄 Sincronizar ($pendientes)"
     }
 
     // --- MONITOREO DE CONEXIÓN EN TIEMPO REAL ---
@@ -218,7 +236,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             override fun onAvailable(network: Network) {
                 runOnUiThread {
                     actualizarEstadoRedUI(true)
-                    // Auto-sincronizar pendientes al recuperar conexión (opcional)
                     if (dbHelper.contarPendientes() > 0) {
                         sincronizarPendientes()
                     }
@@ -237,10 +254,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private fun actualizarEstadoRedUI(hayInternet: Boolean) {
         if (hayInternet) {
             layoutEstadoRed.setBackgroundColor(Color.parseColor("#2E7D32")) // Verde
-            tvEstadoRed.text = "🟢 ESTADO: ONLINE (Conexión activa)"
+            tvEstadoRed.text = "🟢 MODO ONLINE • Conexión Activa a Firestore"
         } else {
             layoutEstadoRed.setBackgroundColor(Color.parseColor("#C62828")) // Rojo
-            tvEstadoRed.text = "🔴 ESTADO: OFFLINE (Sin internet)"
+            tvEstadoRed.text = "🔴 MODO OFFLINE • Guardando en SQLite Local"
         }
     }
 }

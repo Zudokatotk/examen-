@@ -10,13 +10,16 @@ class DatabaseHelper(context: Context) :
 
     companion object {
         const val DATABASE_NAME = "examen_sensores.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2
 
         const val TABLE_MEDICIONES = "mediciones"
         const val COL_ID = "id"
         const val COL_FIRESTORE_ID = "firestore_id"
         const val COL_TIPO_SENSOR = "tipo_sensor"
         const val COL_VALOR = "valor"
+        const val COL_EJE_X = "eje_x"
+        const val COL_EJE_Y = "eje_y"
+        const val COL_EJE_Z = "eje_z"
         const val COL_FECHA_HORA = "fecha_hora"
         const val COL_IS_SYNCED = "is_synced"
     }
@@ -28,6 +31,9 @@ class DatabaseHelper(context: Context) :
                 $COL_FIRESTORE_ID TEXT,
                 $COL_TIPO_SENSOR TEXT NOT NULL,
                 $COL_VALOR REAL NOT NULL,
+                $COL_EJE_X REAL NOT NULL DEFAULT 0.0,
+                $COL_EJE_Y REAL NOT NULL DEFAULT 0.0,
+                $COL_EJE_Z REAL NOT NULL DEFAULT 0.0,
                 $COL_FECHA_HORA TEXT NOT NULL,
                 $COL_IS_SYNCED INTEGER NOT NULL DEFAULT 0
             )
@@ -46,6 +52,9 @@ class DatabaseHelper(context: Context) :
             put(COL_FIRESTORE_ID, medicion.firestoreId)
             put(COL_TIPO_SENSOR, medicion.tipoSensor)
             put(COL_VALOR, medicion.valor)
+            put(COL_EJE_X, medicion.ejeX)
+            put(COL_EJE_Y, medicion.ejeY)
+            put(COL_EJE_Z, medicion.ejeZ)
             put(COL_FECHA_HORA, medicion.fechaHora)
             put(COL_IS_SYNCED, medicion.isSynced)
         }
@@ -64,6 +73,9 @@ class DatabaseHelper(context: Context) :
                         firestoreId = it.getString(it.getColumnIndexOrThrow(COL_FIRESTORE_ID)) ?: "",
                         tipoSensor = it.getString(it.getColumnIndexOrThrow(COL_TIPO_SENSOR)),
                         valor = it.getDouble(it.getColumnIndexOrThrow(COL_VALOR)),
+                        ejeX = it.getDouble(it.getColumnIndexOrThrow(COL_EJE_X)),
+                        ejeY = it.getDouble(it.getColumnIndexOrThrow(COL_EJE_Y)),
+                        ejeZ = it.getDouble(it.getColumnIndexOrThrow(COL_EJE_Z)),
                         fechaHora = it.getString(it.getColumnIndexOrThrow(COL_FECHA_HORA)),
                         isSynced = it.getInt(it.getColumnIndexOrThrow(COL_IS_SYNCED))
                     )
@@ -88,6 +100,9 @@ class DatabaseHelper(context: Context) :
                         firestoreId = it.getString(it.getColumnIndexOrThrow(COL_FIRESTORE_ID)) ?: "",
                         tipoSensor = it.getString(it.getColumnIndexOrThrow(COL_TIPO_SENSOR)),
                         valor = it.getDouble(it.getColumnIndexOrThrow(COL_VALOR)),
+                        ejeX = it.getDouble(it.getColumnIndexOrThrow(COL_EJE_X)),
+                        ejeY = it.getDouble(it.getColumnIndexOrThrow(COL_EJE_Y)),
+                        ejeZ = it.getDouble(it.getColumnIndexOrThrow(COL_EJE_Z)),
                         fechaHora = it.getString(it.getColumnIndexOrThrow(COL_FECHA_HORA)),
                         isSynced = 0
                     )
@@ -119,10 +134,5 @@ class DatabaseHelper(context: Context) :
             }
         }
         return total
-    }
-
-    fun limpiarTabla() {
-        val db = writableDatabase
-        db.delete(TABLE_MEDICIONES, null, null)
     }
 }
