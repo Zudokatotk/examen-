@@ -11,7 +11,6 @@ import androidx.core.content.ContextCompat
 
 object LocationHelper {
 
-    // Coordenadas de respaldo (Campus Universitario) por si el GPS del emulador tarda en responder
     const val DEFAULT_LAT = -17.3753
     const val DEFAULT_LNG = -66.1568
 
@@ -20,18 +19,17 @@ object LocationHelper {
         context: Context,
         onUbicacionObtenida: (Double, Double) -> Unit
     ) {
-        val fineLocationPermission = ContextCompat.checkSelfPermission(
+        val fineLocation = ContextCompat.checkSelfPermission(
             context,
             android.Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
 
-        val coarseLocationPermission = ContextCompat.checkSelfPermission(
+        val coarseLocation = ContextCompat.checkSelfPermission(
             context,
             android.Manifest.permission.ACCESS_COARSE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
 
-        if (!fineLocationPermission && !coarseLocationPermission) {
-            // Si aún no aceptó permisos, usamos coordenadas por defecto para que no falle la prueba
+        if (!fineLocation && !coarseLocation) {
             onUbicacionObtenida(DEFAULT_LAT, DEFAULT_LNG)
             return
         }
@@ -42,7 +40,6 @@ object LocationHelper {
             return
         }
 
-        // 1. Intentar obtener última ubicación conocida de GPS o Red
         val lastGps = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
         val lastNetwork = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
         val bestLocation: Location? = lastGps ?: lastNetwork
@@ -52,7 +49,6 @@ object LocationHelper {
             return
         }
 
-        // 2. Si es null (emulador recién abierto), solicitar una actualización inmediata
         try {
             val listener = object : LocationListener {
                 override fun onLocationChanged(location: Location) {
@@ -60,9 +56,9 @@ object LocationHelper {
                     lm.removeUpdates(this)
                 }
                 @Deprecated("Deprecated in Java")
-                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-                override fun onProviderEnabled(provider: String) {}
-                override fun onProviderDisabled(provider: String) {}
+                override fun onStatusChanged(p0: String?, p1: Int, p2: Bundle?) {}
+                override fun onProviderEnabled(p0: String) {}
+                override fun onProviderDisabled(p0: String) {}
             }
 
             if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {

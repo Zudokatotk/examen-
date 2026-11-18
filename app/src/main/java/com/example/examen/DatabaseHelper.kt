@@ -121,10 +121,6 @@ class DatabaseHelper(context: Context) :
         db.update(TABLE_ALUMNOS, values, "$COL_ID = ?", arrayOf(localId.toString()))
     }
 
-    /**
-     * Guarda en SQLite los alumnos que vienen de Firebase si no existen localmente
-     * (cumple la nota del examen: ambas BD deben tener los mismos registros)
-     */
     fun insertarSiNoExisteDesdeFirestore(alumno: Alumno) {
         val db = writableDatabase
         val cursor = db.rawQuery(

@@ -47,25 +47,20 @@ import kotlin.math.sqrt
 
 class MainActivity : ComponentActivity(), SensorEventListener {
 
-    // Sensores de Hardware (Punto 9)
     private lateinit var sensorManager: SensorManager
     private var acelerometro: Sensor? = null
-    private var sensorProximidad: Sensor? = null
-    private var sensorLuz: Sensor? = null
     private var ultimoTimestampSensor: Long = 0L
 
-    // Bases de Datos Local (SQLite) y Nube (Firestore) (Punto 10)
     private lateinit var dbHelper: DatabaseHelper
     private lateinit var firestoreManager: FirestoreManager
     private var listaAlumnos = mutableStateOf<List<Alumno>>(emptyList())
     private var pendientesCount = mutableIntStateOf(0)
 
-    // Estados reactivos
     private var estadoConexion = mutableStateOf(TipoConexion.SIN_CONEXION)
     private var mensajeAlerta = mutableStateOf<String?>(null)
     private var latitudCargada = mutableStateOf("0.0")
     private var longitudCargada = mutableStateOf("0.0")
-    private var estadoSensorEnVivo = mutableStateOf("Iniciando sensores...")
+    private var estadoSensorEnVivo = mutableStateOf("Listo: Agita el teléfono para cargar GPS")
 
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
@@ -78,15 +73,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
         iniciarMonitoreoRed()
 
-        // Configuración de Sensores
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         acelerometro = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        sensorProximidad = sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)
-        sensorLuz = sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT)
-
-        // Diagnóstico inicial en pantalla para POCO / Xiaomi
-        val nombreProximidad = sensorProximidad?.name ?: "Virtual/No disponible"
-        estadoSensorEnVivo.value = "Sensor: $nombreProximidad • Listo para agitar o tapar"
 
         recargarDatos()
 
@@ -134,7 +122,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                             comprobarRedYEmitirAlerta(mostrarToast = true)
                         },
                         onSimularSensorGPS = {
-                            activarCapturaUbicacion("Simulación manual de sensor")
+                            activarCapturaUbicacion("Acelerómetro")
                         },
                         onDismissAlerta = { mensajeAlerta.value = null },
                         onRegistrarAlumno = { alumno ->
@@ -152,10 +140,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     override fun onResume() {
         super.onResume()
         comprobarRedYEmitirAlerta(mostrarToast = false)
-
         acelerometro?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
-        sensorProximidad?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
-        sensorLuz?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
     }
 
     override fun onPause() {
@@ -171,55 +156,20 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUNTO 9: Detección Sensible para POCO / Xiaomi (Agitar + Proximidad + Luz)
-    // ─────────────────────────────────────────────────────────────────────────
-
     override fun onSensorChanged(event: SensorEvent?) {
         if (event == null) return
         val ahora = System.currentTimeMillis()
 
-        // 1. SENSOR DE AGITADO (Acelerómetro) - 100% Funcional en POCO X7 Pro
         if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
             val x = event.values[0] / SensorManager.GRAVITY_EARTH
             val y = event.values[1] / SensorManager.GRAVITY_EARTH
             val z = event.values[2] / SensorManager.GRAVITY_EARTH
             val gForce = sqrt((x * x + y * y + z * z).toDouble())
 
-            // Un movimiento de muñeca o sacudida leve supera 1.3g
-            if (gForce > 1.30 && (ahora - ultimoTimestampSensor > 1200)) {
+            if (gForce > 1.25 && (ahora - ultimoTimestampSensor > 1200)) {
                 ultimoTimestampSensor = ahora
-                estadoSensorEnVivo.value = "⚡ ¡SACUDIDA DETECTADA! (Fuerza G: ${String.format(Locale.US, "%.2f", gForce)})"
-                activarCapturaUbicacion("Sacudida de Teléfono (Acelerómetro)")
-            }
-        }
-
-        // 2. SENSOR DE PROXIMIDAD
-        if (event.sensor.type == Sensor.TYPE_PROXIMITY) {
-            val distancia = event.values[0]
-            val maxRango = event.sensor.maximumRange
-
-            val estaCerca = (distancia < maxRango) || (distancia == 0.0f) || (distancia <= 3.0f)
-            estadoSensorEnVivo.value = if (estaCerca) {
-                "✋ ¡PROXIMIDAD CERCA! (${distancia} cm)"
-            } else {
-                "👋 Proximidad: Lejos (${distancia} cm)"
-            }
-
-            if (estaCerca && (ahora - ultimoTimestampSensor > 1200)) {
-                ultimoTimestampSensor = ahora
-                activarCapturaUbicacion("Sensor de Proximidad")
-            }
-        }
-
-        // 3. SENSOR DE LUZ (Respaldo óptico para POCO/Xiaomi si el de proximidad es virtual)
-        // En los Poco/Xiaomi, al tapar la parte superior con la mano, el sensor de luz cae a 0 lux
-        if (event.sensor.type == Sensor.TYPE_LIGHT) {
-            val lux = event.values[0]
-            if (lux <= 3.0f && (ahora - ultimoTimestampSensor > 1500)) {
-                ultimoTimestampSensor = ahora
-                estadoSensorEnVivo.value = "✋ ¡MANO TAPANDO PANTALLA! ($lux lux)"
-                activarCapturaUbicacion("Sensor Óptico Cubierto (Mano cerca)")
+                estadoSensorEnVivo.value = "⚡ ¡Dispositivo Agitado!"
+                activarCapturaUbicacion("Acelerómetro (Agitado)")
             }
         }
     }
@@ -228,24 +178,20 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     private fun activarCapturaUbicacion(origenSensor: String) {
         runOnUiThread {
-            Toast.makeText(this, "📡 $origenSensor: Obteniendo GPS...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Obteniendo coordenadas por GPS...", Toast.LENGTH_SHORT).show()
             LocationHelper.obtenerCoordenadas(this) { lat, lng ->
                 runOnUiThread {
                     latitudCargada.value = String.format(Locale.US, "%.5f", lat)
                     longitudCargada.value = String.format(Locale.US, "%.5f", lng)
                     Toast.makeText(
                         this,
-                        "📍 Coordenadas cargadas: Lat ${latitudCargada.value}, Lng ${longitudCargada.value}",
+                        "Coordenadas cargadas: Lat ${latitudCargada.value}, Lng ${longitudCargada.value}",
                         Toast.LENGTH_SHORT
                     ).show()
                 }
             }
         }
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUNTO 10: Guardado y Sincronización
-    // ─────────────────────────────────────────────────────────────────────────
 
     private fun guardarAlumno(alumno: Alumno) {
         if (alumno.ci.isEmpty() || alumno.nombres.isEmpty()) {
@@ -264,26 +210,26 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 onSuccess = { firestoreId ->
                     dbHelper.marcarComoSincronizado(idLocal, firestoreId)
                     runOnUiThread {
-                        Toast.makeText(this, "Guardado en SQLite y sincronizado en Firestore ☁️", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Guardado en SQLite y sincronizado en Firestore", Toast.LENGTH_SHORT).show()
                         recargarDatos()
                     }
                 },
                 onFailure = {
                     runOnUiThread {
-                        Toast.makeText(this, "Guardado en SQLite local (Fallo al subir)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Guardado en SQLite local", Toast.LENGTH_SHORT).show()
                         recargarDatos()
                     }
                 }
             )
         } else {
-            Toast.makeText(this, "Guardado en SQLite local (Modo Offline) 📱", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Guardado en SQLite local (Modo Offline)", Toast.LENGTH_SHORT).show()
             recargarDatos()
         }
     }
 
     private fun sincronizarBasesDeDatos() {
         if (estadoConexion.value == TipoConexion.SIN_CONEXION) {
-            Toast.makeText(this, "No hay conexión para sincronizar ❌", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Sin conexión a internet", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -308,7 +254,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 }
                 runOnUiThread {
                     recargarDatos()
-                    Toast.makeText(this, "¡Sincronización completa! Ambas bases coinciden ✔️", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Sincronización completa", Toast.LENGTH_SHORT).show()
                 }
             },
             onFailure = {
@@ -330,9 +276,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         NetworkSoundHelper.reproducirSonidoAlerta(hayInternet)
 
         val texto = when (tipo) {
-            TipoConexion.WIFI -> "🟢 Wi-Fi ACTIVO • Se registrará en la nube (Firestore)"
-            TipoConexion.DATOS_MOVILES -> "📱 Datos Móviles ACTIVOS • Se registrará en la nube"
-            TipoConexion.SIN_CONEXION -> "🔴 SIN CONEXIÓN • Se registrará en la Base de Datos Local"
+            TipoConexion.WIFI -> "Wi-Fi Activo"
+            TipoConexion.DATOS_MOVILES -> "Datos Móviles Activos"
+            TipoConexion.SIN_CONEXION -> "Sin Conexión (Modo Offline)"
         }
         mensajeAlerta.value = texto
 
@@ -361,10 +307,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         cm.registerNetworkCallback(request, networkCallback!!)
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PANTALLA COMPOSE
-// ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -409,13 +351,13 @@ fun RegistroAlumnoScreen(
                     title = {
                         Column {
                             Text(
-                                "👨‍🎓 Registro de Alumnos",
+                                "Registro de Alumnos",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 18.sp,
                                 color = Color.White
                             )
                             Text(
-                                "Examen Móvil II • SQLite ⇄ Cloud Firestore",
+                                "SQLite y Cloud Firestore",
                                 fontSize = 12.sp,
                                 color = Color(0xFFBBDEFB)
                             )
@@ -425,9 +367,9 @@ fun RegistroAlumnoScreen(
                 )
 
                 val (colorFondo, textoBarra) = when (tipoConexion) {
-                    TipoConexion.WIFI -> Color(0xFF2E7D32) to "📶 Wi-Fi ACTIVO (Online)"
-                    TipoConexion.DATOS_MOVILES -> Color(0xFF1976D2) to "📶 DATOS MÓVILES ACTIVOS (Online)"
-                    TipoConexion.SIN_CONEXION -> Color(0xFFC62828) to "⚠️ SIN CONEXIÓN (Modo Offline Local)"
+                    TipoConexion.WIFI -> Color(0xFF2E7D32) to "Wi-Fi Activo"
+                    TipoConexion.DATOS_MOVILES -> Color(0xFF1976D2) to "Datos Móviles Activos"
+                    TipoConexion.SIN_CONEXION -> Color(0xFFC62828) to "Sin Conexión (Modo Offline)"
                 }
 
                 Box(
@@ -466,7 +408,7 @@ fun RegistroAlumnoScreen(
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("🔊 Probar Red", fontSize = 12.sp)
+                        Text("Verificar Conexión", fontSize = 12.sp)
                     }
 
                     Button(
@@ -475,7 +417,7 @@ fun RegistroAlumnoScreen(
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF455A64))
                     ) {
-                        Text("📡 Forzar Sensor", fontSize = 12.sp)
+                        Text("Activar Sensor", fontSize = 12.sp)
                     }
                 }
             }
@@ -510,7 +452,6 @@ fun RegistroAlumnoScreen(
                 }
             }
 
-            // Card del Sensor en Vivo (Proximidad + Agitar + Sensor de Luz)
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -519,13 +460,13 @@ fun RegistroAlumnoScreen(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            "📲 Sensor para GPS (Punto 9):",
+                            "Sensor de Agitado:",
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
                             color = Color(0xFF0277BD)
                         )
                         Text(
-                            "• Agita el teléfono con la muñeca O tapa la parte superior de la pantalla para cargar Lat y Long.",
+                            "Agita el teléfono para cargar Latitud y Longitud.",
                             fontSize = 11.sp,
                             color = Color(0xFF01579B)
                         )
@@ -548,7 +489,7 @@ fun RegistroAlumnoScreen(
 
             item {
                 Text(
-                    text = "Formulario de Registro (Punto 7)",
+                    text = "Datos del Estudiante",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF0D47A1)
@@ -589,14 +530,13 @@ fun RegistroAlumnoScreen(
                 )
             }
 
-            // Fecha de Nacimiento con DatePicker (Calendario)
             item {
                 Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = fechaNacimiento,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Fecha de Nacimiento (Toca para elegir)") },
+                        label = { Text("Fecha de Nacimiento") },
                         placeholder = { Text("Seleccionar en el calendario") },
                         trailingIcon = {
                             IconButton(onClick = { datePickerDialog.show() }) {
@@ -619,7 +559,6 @@ fun RegistroAlumnoScreen(
                 }
             }
 
-            // Latitud y Longitud (readOnly = true, Punto 9)
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -629,7 +568,7 @@ fun RegistroAlumnoScreen(
                         value = latitud,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Latitud (Sensor)") },
+                        label = { Text("Latitud") },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -642,7 +581,7 @@ fun RegistroAlumnoScreen(
                         value = longitud,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Longitud (Sensor)") },
+                        label = { Text("Longitud") },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -653,7 +592,6 @@ fun RegistroAlumnoScreen(
                 }
             }
 
-            // Botones de Registro y Sincronización
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -681,7 +619,7 @@ fun RegistroAlumnoScreen(
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
                     ) {
-                        Text("💾 Guardar Alumno", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text("Guardar Alumno", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
 
                     Button(
@@ -692,12 +630,11 @@ fun RegistroAlumnoScreen(
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
                     ) {
-                        Text("🔄 Sync ($pendientes)", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text("Sync ($pendientes)", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
 
-            // Título de la lista
             item {
                 Row(
                     modifier = Modifier
@@ -707,7 +644,7 @@ fun RegistroAlumnoScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "📋 Alumnos Registrados (Punto 10)",
+                        "Alumnos Registrados",
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF37474F),
                         fontSize = 14.sp
@@ -723,7 +660,7 @@ fun RegistroAlumnoScreen(
             if (alumnos.isEmpty()) {
                 item {
                     Text(
-                        "No hay alumnos registrados aún.\nLlena el formulario y presiona 'Guardar Alumno'.",
+                        "No hay alumnos registrados aún.",
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 24.dp),
@@ -751,7 +688,7 @@ fun PreviewPantallaAlumno() {
         mensajeAlerta = null,
         latitud = "-17.3753",
         longitud = "-66.1568",
-        sensorInfo = "Sensor: Listo para agitar o tapar",
+        sensorInfo = "Listo: Agita el teléfono",
         alumnos = listOf(
             Alumno(
                 id = 1,
@@ -789,16 +726,16 @@ fun AlumnoItemCard(alumno: Alumno) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "🎓 ${alumno.nombres} ${alumno.apellidos}",
+                    "${alumno.nombres} ${alumno.apellidos}",
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
                     color = Color(0xFF1565C0)
                 )
 
                 val (badgeText, badgeBg, badgeTextColor) = if (alumno.isSynced == 1) {
-                    Triple("☁️ Firestore", Color(0xFFE8F5E9), Color(0xFF1B5E20))
+                    Triple("Firestore", Color(0xFFE8F5E9), Color(0xFF1B5E20))
                 } else {
-                    Triple("⏳ SQLite Local", Color(0xFFFFF3E0), Color(0xFFE65100))
+                    Triple("SQLite Local", Color(0xFFFFF3E0), Color(0xFFE65100))
                 }
 
                 Surface(
@@ -830,7 +767,7 @@ fun AlumnoItemCard(alumno: Alumno) {
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    "📍 Lat: ${alumno.latitud} | Lng: ${alumno.longitud}",
+                    "Lat: ${alumno.latitud} | Lng: ${alumno.longitud}",
                     fontSize = 11.sp,
                     color = Color(0xFF546E7A)
                 )

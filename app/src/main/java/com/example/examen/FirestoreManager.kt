@@ -11,9 +11,6 @@ class FirestoreManager {
         const val COLECCION_ALUMNOS = "alumnos"
     }
 
-    /**
-     * Sube un alumno a Cloud Firestore
-     */
     fun subirAlumno(
         alumno: Alumno,
         onSuccess: (String) -> Unit,
@@ -32,18 +29,15 @@ class FirestoreManager {
         db.collection(COLECCION_ALUMNOS)
             .add(documento)
             .addOnSuccessListener { docRef ->
-                Log.d(TAG, "Alumno subido a Firestore con ID: ${docRef.id}")
+                Log.d(TAG, "Alumno subido: ${docRef.id}")
                 onSuccess(docRef.id)
             }
             .addOnFailureListener { e ->
-                Log.e(TAG, "Error al subir alumno a Firestore", e)
+                Log.e(TAG, "Error: ", e)
                 onFailure(e)
             }
     }
 
-    /**
-     * Descarga todos los alumnos de Firestore para sincronizar bidireccionalmente
-     */
     fun descargarAlumnos(
         onSuccess: (List<Alumno>) -> Unit,
         onFailure: (Exception) -> Unit
@@ -70,7 +64,7 @@ class FirestoreManager {
                 onSuccess(lista)
             }
             .addOnFailureListener { e ->
-                Log.e(TAG, "Error al descargar alumnos de Firestore", e)
+                Log.e(TAG, "Error: ", e)
                 onFailure(e)
             }
     }
