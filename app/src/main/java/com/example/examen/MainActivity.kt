@@ -1,14 +1,22 @@
 package com.example.examen
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -24,19 +32,38 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import java.util.Locale
+import kotlin.math.sqrt
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), SensorEventListener {
 
+    // Sensores de Hardware (Punto 9)
+    private lateinit var sensorManager: SensorManager
+    private var acelerometro: Sensor? = null
+    private var sensorProximidad: Sensor? = null
+    private var ultimoTimestampSensor: Long = 0L
+
+    // Estados reactivos
     private var estadoConexion = mutableStateOf(TipoConexion.SIN_CONEXION)
     private var mensajeAlerta = mutableStateOf<String?>(null)
+    private var latitudCargada = mutableStateOf("0.0")
+    private var longitudCargada = mutableStateOf("0.0")
+    private var ultimoSensorActivado = mutableStateOf("Ninguno (Esperando sacudida o proximidad)")
+
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Monitoreo en tiempo real de Wi-Fi y Datos
+        // Monitoreo de Red (Punto 8)
         iniciarMonitoreoRed()
+
+        // Configuración de Sensores (Punto 9)
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        acelerometro = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        sensorProximidad = sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)
 
         setContent {
             MaterialTheme(
@@ -46,6 +73,27 @@ class MainActivity : ComponentActivity() {
                     surface = Color(0xFFF8F9FA)
                 )
             ) {
+                // Solicitar permisos de GPS al iniciar
+                val permissionLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.RequestMultiplePermissions()
+                ) { /* Permisos otorgados o denegados */ }
+
+                LaunchedEffect(Unit) {
+                    val fineGranted = ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+
+                    if (!fineGranted) {
+                        permissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    }
+                }
+
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.surface
@@ -53,14 +101,20 @@ class MainActivity : ComponentActivity() {
                     RegistroAlumnoScreen(
                         tipoConexion = estadoConexion.value,
                         mensajeAlerta = mensajeAlerta.value,
+                        latitud = latitudCargada.value,
+                        longitud = longitudCargada.value,
+                        sensorInfo = ultimoSensorActivado.value,
                         onVerificarConexionManual = {
                             comprobarRedYEmitirAlerta(mostrarToast = true)
+                        },
+                        onSimularSensorGPS = {
+                            activarCapturaUbicacion("Simulación manual de sensor")
                         },
                         onDismissAlerta = { mensajeAlerta.value = null },
                         onRegistrarAlumno = { alumno ->
                             Toast.makeText(
                                 this,
-                                "Alumno registrado: ${alumno.nombres} ${alumno.apellidos}",
+                                "Alumno registrado: ${alumno.nombres} (Lat: ${alumno.latitud}, Lng: ${alumno.longitud})",
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -73,6 +127,17 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         comprobarRedYEmitirAlerta(mostrarToast = false)
+        acelerometro?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+        }
+        sensorProximidad?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sensorManager.unregisterListener(this)
     }
 
     override fun onDestroy() {
@@ -84,7 +149,61 @@ class MainActivity : ComponentActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // PUNTO 8: Verificación de sensores Wi-Fi / Datos + Sonido + Mensaje
+    // PUNTO 9: Detección de Sensores (Agitar / Proximidad) y Carga de GPS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    override fun onSensorChanged(event: SensorEvent?) {
+        if (event == null) return
+        val ahora = System.currentTimeMillis()
+
+        // 1. Detección por Proximidad (pasar la mano sobre la pantalla)
+        if (event.sensor.type == Sensor.TYPE_PROXIMITY) {
+            val distancia = event.values[0]
+            val maxRango = event.sensor.maximumRange
+            if (distancia < maxRango && (ahora - ultimoTimestampSensor > 1500)) {
+                ultimoTimestampSensor = ahora
+                activarCapturaUbicacion("Sensor de Proximidad (Mano detectada)")
+            }
+        }
+
+        // 2. Detección Agitando el Dispositivo (Acelerómetro)
+        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            val x = event.values[0]
+            val y = event.values[1]
+            val z = event.values[2]
+            val aceleracionTotal = sqrt((x * x + y * y + z * z).toDouble())
+
+            // Si la aceleración supera el umbral de sacudida (fuerte movimiento)
+            if (aceleracionTotal > 15.0 && (ahora - ultimoTimestampSensor > 1500)) {
+                ultimoTimestampSensor = ahora
+                activarCapturaUbicacion("Dispositivo Agitado (Acelerómetro)")
+            }
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    private fun activarCapturaUbicacion(origenSensor: String) {
+        runOnUiThread {
+            ultimoSensorActivado.value = "⚡ Activado por: $origenSensor"
+            Toast.makeText(this, "📡 $origenSensor: Obteniendo GPS...", Toast.LENGTH_SHORT).show()
+
+            LocationHelper.obtenerCoordenadas(this) { lat, lng ->
+                runOnUiThread {
+                    latitudCargada.value = String.format(Locale.US, "%.5f", lat)
+                    longitudCargada.value = String.format(Locale.US, "%.5f", lng)
+                    Toast.makeText(
+                        this,
+                        "📍 Coordenadas cargadas en el formulario: Lat $latitudCargada, Lng $longitudCargada",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PUNTO 8: Verificación Wi-Fi / Datos + Sonido
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun comprobarRedYEmitirAlerta(mostrarToast: Boolean) {
@@ -112,15 +231,10 @@ class MainActivity : ComponentActivity() {
 
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                runOnUiThread {
-                    comprobarRedYEmitirAlerta(mostrarToast = true)
-                }
+                runOnUiThread { comprobarRedYEmitirAlerta(mostrarToast = true) }
             }
-
             override fun onLost(network: Network) {
-                runOnUiThread {
-                    comprobarRedYEmitirAlerta(mostrarToast = true)
-                }
+                runOnUiThread { comprobarRedYEmitirAlerta(mostrarToast = true) }
             }
         }
         cm.registerNetworkCallback(request, networkCallback!!)
@@ -128,7 +242,7 @@ class MainActivity : ComponentActivity() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PANTALLA COMPOSE (Punto 7 + Punto 8)
+// PANTALLA COMPOSE (Puntos 7 + 8 + 9)
 // ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -136,7 +250,11 @@ class MainActivity : ComponentActivity() {
 fun RegistroAlumnoScreen(
     tipoConexion: TipoConexion,
     mensajeAlerta: String?,
+    latitud: String,
+    longitud: String,
+    sensorInfo: String,
     onVerificarConexionManual: () -> Unit,
+    onSimularSensorGPS: () -> Unit,
     onDismissAlerta: () -> Unit,
     onRegistrarAlumno: (Alumno) -> Unit
 ) {
@@ -144,9 +262,6 @@ fun RegistroAlumnoScreen(
     var nombres by remember { mutableStateOf("") }
     var apellidos by remember { mutableStateOf("") }
     var fechaNacimiento by remember { mutableStateOf("") }
-
-    var latitud by remember { mutableStateOf("0.0") }
-    var longitud by remember { mutableStateOf("0.0") }
 
     Scaffold(
         topBar = {
@@ -160,12 +275,10 @@ fun RegistroAlumnoScreen(
                             color = Color.White
                         )
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color(0xFF1565C0)
-                    )
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF1565C0))
                 )
 
-                // Barra indicadora de Wi-Fi / Datos (Punto 8)
+                // Barra indicadora de Red (Punto 8)
                 val (colorFondo, textoBarra) = when (tipoConexion) {
                     TipoConexion.WIFI -> Color(0xFF2E7D32) to "📶 Wi-Fi ACTIVO (Online)"
                     TipoConexion.DATOS_MOVILES -> Color(0xFF1976D2) to "📶 DATOS MÓVILES ACTIVOS (Online)"
@@ -197,16 +310,30 @@ fun RegistroAlumnoScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Botón de prueba para Punto 8 (Emitir sonido y verificar Wi-Fi)
-            OutlinedButton(
-                onClick = onVerificarConexionManual,
+            // Botones de prueba Punto 8 y Punto 9
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("🔊 Probar Sensor Wi-Fi / Datos (Alerta Sonora)")
+                OutlinedButton(
+                    onClick = onVerificarConexionManual,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("🔊 Probar Red", fontSize = 12.sp)
+                }
+
+                Button(
+                    onClick = onSimularSensorGPS,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF455A64))
+                ) {
+                    Text("📡 Forzar Sensor", fontSize = 12.sp)
+                }
             }
 
-            // Diálogo o Card de Alerta si cambió la red (Punto 8)
+            // Alerta si cambió la red (Punto 8)
             mensajeAlerta?.let { mensaje ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -219,8 +346,7 @@ fun RegistroAlumnoScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = mensaje,
@@ -236,8 +362,35 @@ fun RegistroAlumnoScreen(
                 }
             }
 
+            // Banner del estado del Sensor (Punto 9)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFE1F5FE))
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text(
+                        "📲 Sensor para GPS (Punto 9):",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = Color(0xFF0277BD)
+                    )
+                    Text(
+                        "• Agita el teléfono O acerca la mano al sensor de proximidad para autollenar Lat y Long.",
+                        fontSize = 11.sp,
+                        color = Color(0xFF01579B)
+                    )
+                    Text(
+                        sensorInfo,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF004D40)
+                    )
+                }
+            }
+
             Text(
-                text = "Datos del Estudiante (Punto 7)",
+                text = "Formulario de Registro (Punto 7)",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFF0D47A1)
@@ -284,7 +437,7 @@ fun RegistroAlumnoScreen(
                 shape = RoundedCornerShape(10.dp)
             )
 
-            // Latitud y Longitud (readOnly)
+            // Latitud y Longitud (readOnly = true, Punto 9)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -292,8 +445,8 @@ fun RegistroAlumnoScreen(
                 OutlinedTextField(
                     value = latitud,
                     onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Latitud") },
+                    readOnly = true, // Bloqueado tal como exige el examen
+                    label = { Text("Latitud (Sensor)") },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -305,8 +458,8 @@ fun RegistroAlumnoScreen(
                 OutlinedTextField(
                     value = longitud,
                     onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Longitud") },
+                    readOnly = true, // Bloqueado tal como exige el examen
+                    label = { Text("Longitud (Sensor)") },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -316,7 +469,7 @@ fun RegistroAlumnoScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             // Botón de Registro
             Button(
